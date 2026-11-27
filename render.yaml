@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: sunport
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: MAX_PLAYERS
+        value: "16"
+      # Optional TURN relay so voice works on strict mobile networks (see README):
+      # - key: TURN_URL
+      #   value: turn:your.turn.host:3478
+      # - key: TURN_USER
+      #   value: user
+      # - key: TURN_PASS
+      #   value: secret
