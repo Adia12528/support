@@ -28,8 +28,10 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 const players = new Map(); let nextId = 1;
+// shared world memory: vehicles left behind by players (u -> state) and parked cars already taken (index)
+const drops = new Map(), taken = new Set();
 const send = (p, o) => { if (p.ws.readyState === 1) p.ws.send(JSON.stringify(o)); };
 const bcast = (o, except) => { const s = JSON.stringify(o); for (const p of players.values()) if (p !== except && p.ws.readyState === 1) p.ws.send(s); };
 const clean = (s, n) => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
@@ -50,11 +52,11 @@ wss.on('connection', (ws) => {
     switch (m.t) {
       case 'join': {
         if (p.joined) return; p.joined = true; p.name = clean(m.name, 16) || 'Player' + p.id; p.look = m.look && typeof m.look === 'object' ? m.look : null; players.set(p.id, p);
-        send(p, { t: 'welcome', id: p.id, ice: ICE, time: hoursNow(), players: [...players.values()].filter((q) => q !== p).map((q) => ({ id: q.id, name: q.name, look: q.look, s: q.s, host: q.ride ? q.ride.host : 0, seat: q.ride ? q.ride.seat : 0 })) });
+        send(p, { t: 'welcome', id: p.id, ice: ICE, time: hoursNow(), drops: [...drops.values()], taken: [...taken], players: [...players.values()].filter((q) => q !== p).map((q) => ({ id: q.id, name: q.name, look: q.look, s: q.s, host: q.ride ? q.ride.host : 0, seat: q.ride ? q.ride.seat : 0 })) });
         bcast({ t: 'join', id: p.id, name: p.name, look: p.look }, p); break;
       }
       case 's': { // state: x,y,z,yaw,m(ode),sp, sw(im), g(round), vy, ch(ute), vt(vehicle type), vc(colour), pi(tch), ro(ll), st(eer), vf(wheel speed), lk(look yaw)
-        if (!p.joined || !m.s) return; const s = m.s; p.s = { x: num(s.x), y: num(s.y), z: num(s.z), yaw: num(s.yaw), m: clean(s.m, 4), sp: num(s.sp), sw: s.sw ? 1 : 0, g: s.g ? 1 : 0, vy: num(s.vy), ch: s.ch ? 1 : 0, vt: clean(s.vt, 12), vc: num(s.vc), pi: num(s.pi), ro: num(s.ro), st: num(s.st), vf: num(s.vf), lk: num(s.lk), ins: clean(s.ins, 12), ho: s.ho ? 1 : 0 };
+        if (!p.joined || !m.s) return; const s = m.s; p.s = { x: num(s.x), y: num(s.y), z: num(s.z), yaw: num(s.yaw), m: clean(s.m, 4), sp: num(s.sp), sw: s.sw ? 1 : 0, g: s.g ? 1 : 0, vy: num(s.vy), ch: s.ch ? 1 : 0, vt: clean(s.vt, 12), vc: num(s.vc), pi: num(s.pi), ro: num(s.ro), st: num(s.st), vf: num(s.vf), lk: num(s.lk), ins: clean(s.ins, 12), ho: s.ho ? 1 : 0, au: num(s.au) };
         if (p.ride) { const h = players.get(p.ride.host); if (!h || !h.s || h.s.m !== 'c' || !h.s.vt) unseat(p); }
         if (p.s.m !== 'c') ejectPassengers(p); else if (p.hostVeh && p.hostVeh !== p.s.vt) ejectPassengers(p);
         p.hostVeh = p.s.m === 'c' ? p.s.vt : '';
@@ -77,11 +79,22 @@ wss.on('connection', (ws) => {
         p.ride = { host: h.id, seat }; bcast({ t: 'seat', id: p.id, host: h.id, seat }); break;
       }
       case 'unboard': { if (p.joined) unseat(p); break; }
+      case 'w': { // ambient world (traffic + pedestrians) streamed by the nearest player to those who depend on them
+        if (!p.joined || !Array.isArray(m.to)) return; const o = JSON.stringify({ t: 'w', from: p.id, v: m.v, p: m.p });
+        for (const id of m.to.slice(0, 16)) { const q = players.get(+id); if (q && q !== p && q.ws.readyState === 1) q.ws.send(o); } break;
+      }
+      case 'tr': { if (p.joined) bcast({ t: 'tr', d: m.d }, p); break; }
+      case 'drop': { // a player left a vehicle behind: everyone keeps seeing it
+        if (!p.joined) return; const u = clean(m.u, 24), d = { t: 'drop', u, vt: clean(m.vt, 12), x: num(m.x), y: num(m.y), z: num(m.z), yaw: num(m.yaw), vc: num(m.vc), hp: num(m.hp) };
+        if (!u || !d.vt) return; drops.set(u, d); while (drops.size > 60) { const k = drops.keys().next().value; drops.delete(k); bcast({ t: 'pick', u: k }); } bcast(d, p); break;
+      }
+      case 'pick': { if (!p.joined) return; const u = clean(m.u, 24); if (drops.delete(u)) bcast({ t: 'pick', u }, p); else bcast({ t: 'pick', u }, p); break; }
+      case 'park': { if (!p.joined) return; const k = Math.floor(num(m.k, -1)); if (k >= 0 && k < 5000) { taken.add(k); bcast({ t: 'park', k }, p); } break; }
       case 'sig': { const q = players.get(+m.to); if (q && p.joined) send(q, { t: 'sig', from: p.id, d: m.d }); break; }
       case 'ping': send(p, { t: 'pong', c: m.c }); break;
     }
   });
-  const gone = () => { if (!players.has(p.id)) return; ejectPassengers(p); unseat(p, false); players.delete(p.id); bcast({ t: 'leave', id: p.id }); };
+  const gone = () => { if (!players.has(p.id)) return; ejectPassengers(p); unseat(p, false); players.delete(p.id); bcast({ t: 'leave', id: p.id }); if (!players.size) { drops.clear(); taken.clear(); } };
   ws.on('close', gone); ws.on('error', gone);
 });
 setInterval(() => bcast({ t: 'time', h: hoursNow() }), 30000);

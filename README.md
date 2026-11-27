@@ -10,12 +10,12 @@ Sunport is a multiplayer game served by a Node.js server. The server hosts the g
 
 Render deploys this service from GitHub; you do not upload the ZIP or files directly to Render.
 
-1. Create a GitHub repository and upload the contents of this project. The repository root should contain `server.js`, `package.json`, `render.yaml`, and the `public/` folder (with `index.html` inside it). Do not upload `node_modules/`.
+1. Create a GitHub repository and upload the contents of this project. The repository root should contain `render.yaml` and the `server/` folder. Inside `server/`, keep `server.js`, `package.json`, `package-lock.json`, and `public/index.html`. Do not upload `node_modules/`.
 2. Commit the files to your repository.
 3. In Render, choose **New + → Web Service** and connect your GitHub account if prompted.
 4. Select the repository and configure:
    - **Runtime:** Node
-   - **Root Directory:** leave blank
+   - **Root Directory:** `server`
    - **Build Command:** `npm install`
    - **Start Command:** `npm start`
    - **Instance Type:** Free
@@ -31,4 +31,4 @@ Some mobile networks may need a TURN relay for voice connections. Add `TURN_URL`
 
 ### Updating the game
 
-Replace `public/index.html` in GitHub and commit the change. Render will redeploy the service from the updated repository.
+Replace `server/public/index.html` in GitHub and commit the change. Render will redeploy the service from the updated repository.
